@@ -1,0 +1,260 @@
+#!/bin/bash
+# Vaclav Patorek, xpator00
+# 2023/2024 IOS project number 1
+# 17.3.2024
+
+# POSIXLY_CORRECT implementation specified in the assignment
+export POSIXLY_CORRECT=yes
+# Set LC_ALL for consistent behavior
+export LC_ALL=C 
+
+# Function help displays help message with a short description of each command and switch
+help(){
+	echo "POUZITI"
+	echo "	xtf [-h|--help] [FILTR] [PŘÍKAZ] UŽIVATEL LOG [LOG2 [...]]"
+	echo ""
+	echo "VOLBY"
+	echo "	RIKAZ muze byt jeden z:"
+	echo "		list - vypis zaznamu pro daneho uzivatele."
+	echo "		list-currency - vypis serazeneho seznamu vyskytujicich se men."
+	echo "		status - vypis skutecneho stavu uctu seskupeneho a serazeneho dle jednotlivych men."
+	echo "		profit - vypis stavu uctu zakaznika se zapocitanym fiktivnim vynosem."
+	echo "	FILTR muze byt kombinace nasledujicich:"
+	echo "		-a DATETIME - after: jsou uvazovany pouze zaznamy PO tomto datu a case (bez nej). DATETIME je formatu YYYY-MM-DD HH:MM:SS."
+	echo "		-b DATETIME - before: jsou uvazovany pouze zaznamy PRED timto datem a casem (bez nej)."
+	echo "		-c CURRENCY - jsou uvazovany pouze zaznamy odpovidajici dane mene."
+	echo "	-h a --help vypisou napovedu s kratkym popisem kazdeho prikazu a prepinace."
+}
+
+# Function parse that parse command-line arguments in the input log file
+parse(){
+	while getopts ":a:b:c:h-" option; do
+		case $option in
+			h)
+				help
+				exit 0
+				;;
+			
+			-|help)
+				help
+				exit 0
+				;;
+			
+			a)
+				# Control of date format
+				if ! [[ $OPTARG =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+					echo "Error: invalid dateformat for -a">&2
+				exit 1
+				fi
+				after="$OPTARG"
+				;;
+				
+			b)
+				# Control of date format
+				if ! [[ $OPTARG =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+					echo "Error: invalid date format for -b">&2
+				exit 1
+				fi
+				before="$OPTARG"
+				;;
+			
+			c)
+				currency="$OPTARG"
+				;;
+			# Check for invalid option as a command argument
+			\?)
+				echo "Error: invalid option $OPTARG">&2
+				exit 1
+				;;
+				
+			# Check if option requires an argument which is not provided
+			:)
+				echo "Error: option $OPTARG requires an argument">&2
+				exit 1
+				;;
+		esac
+		
+	done
+	
+	# Checking the number of arguments
+	shift $((OPTIND - 1))
+	command="$1"
+	user="$2"
+	if [ $# -gt 2 ]; then
+		shift 2
+		logs=("$@")
+	else
+		logs=()
+	fi
+	
+	# Checking that the necessary arguments are available
+	if [[ "$command" == "list" || "$command" == "status" || "$command" == "profit" ]]; then
+		if [ -z "$user" ]; then
+			echo "Error: missing user argument">&2
+			exit 1
+		fi
+		if [ ${#logs[@]} -eq 0 ]; then
+			echo "Error: missing log files">&2
+			exit 1
+		fi
+	fi
+}
+
+# Function unzip file is used to extract and display the contents of compressed input log files
+unzip_file() {
+	# Goes through each file in the input log file
+	for file in "${logs[@]}"; do
+		# Checking the existance of a input log file
+		if [ ! -e "$file" ]; then
+			echo "Error: file '$file' does not exist">&2
+			exit 1
+		fi
+		# If the input log file is compressed using gzip format, then the input log file is decompresses
+        	if [[ "$file" == *.gz ]]; then
+            		gunzip -dc "$file"
+    		# If the input log file isnt compressed using gzip format then print the input log file
+        	elif [[ -f "$file" ]]; then
+            		cat "$file"
+        	fi
+    	done
+}
+
+# Function filter is used to filter input log file based on specified conditions
+filter(){
+	# Store the input log file contents into a local variable file
+    	local file
+    	file="$1"
+    	# Filters file based on after if the after is set
+	if [ -n "$after" ]; then
+		after_time=$(date -d"$after" +%s)
+        	# Use awk to filter input log file
+		file=$(echo "$file" | awk -v after="$after_time" -F';' '{ "date -d\""$2"\" +%s" | getline date; close("date -d\""$2"\" +%s"); if (date > after) print $0 }')
+	fi
+	
+	# Filters file based on before if the before is set
+	if [ -n "$before" ]; then
+		before_time=$(date -d"$before" +%s)
+		file=$(echo "$file" | awk -v before="$before_time" -F';' '{ "date -d\""$2"\" +%s" | getline date; close("date -d\""$2"\" +%s"); if (date < before) print $0 }')
+	fi
+	# Filters file based on the specified currency if the currency is set
+	if [ -n "$currency" ]; then
+		file=$(echo "$file" | grep -F ";$currency;")
+	fi
+	# Print the filtered file contents
+	echo "$file"
+}
+
+# Function list is used to list the input log file for specified user
+list(){
+	# Extract input log file that contain user and then store the file in the variable user_file
+	local user_file
+	user_file=$(unzip_file "${logs[@]}" | grep "^$user;")
+	# Applies filters
+	local filtered_file
+	filtered_file=$(filter "$user_file")
+	# Print the filtered file that contain user
+	echo "$filtered_file"
+}
+
+# Function listu currency is used to list the currencies associated with transactions for a specified user
+list_currency(){
+	# Extract input log file that contain user and then store the file in the variable user_file
+	local user_file
+	user_file=$(unzip_file "${logs[@]}" | grep "^$user;")
+	# Applies filters
+	local filtered_file
+	filtered_file=$(filter "$user_file")
+	# Print the currency from the filtered file
+	echo "$filtered_file" | cut -d ';' -f 3 | sort -u
+}
+
+# Function status is used to print actual account balances sorted by currencies.
+status(){
+	# Extract input log file that contain user and then store the file in the variable user_file
+	local user_file
+	user_file=$(unzip_file "${logs[@]}" | grep "^$user;")
+	# Applies filters
+	local filtered_file
+	filtered_file=$(filter "$user_file")
+	# Extract the currency from the filtered file
+	local currencies
+	currencies=$(echo "$filtered_file" | cut -d ';' -f 3 | sort -u)
+
+	# Check if the is no filtered file
+	if [ -z "$filtered_file" ]; then
+		# Print each currency with a value of 0.0000
+		for currency in $currencies; do
+			echo "$currency : 0.0000"
+		done
+	else
+		# If there is filtered file it will calculate the total value for each currency and then print the result
+		echo "$filtered_file" | awk -F';' '{arr[$3]+=$4} END {for (x in arr) printf "%s : %.4f\n", x, arr[x]}' | sort
+	fi
+}
+
+# Function profit is used to calculate the user account balance, considering a predefined profit percentage
+profit(){
+	# Set the default profit percantage to 20 percent if the profit is not set
+	local profit_percentage
+	profit_percentage=${XTF_PROFIT=20}
+	# Extract input log file that contain user and then store the file in the variable user_file
+	local user_file
+	user_file=$(unzip_file "${logs[@]}" | grep "^$user;")
+	# Applies filters
+	local filtered_file
+	filtered_file=$(filter "$user_file")
+	# Processes the filtered file to calculate profit for each currency
+	echo "$filtered_file" | awk -F';' -v profit="$profit_percentage" '
+	{
+		arr[$3]+=$4
+		if ($4 > 0) {
+			arr[$3]+=($4 * profit / 100)
+		}
+	} END { for (x in arr) printf "%s : %.4f\n", x, arr[x] }' | sort
+}
+
+# Calling the parse function and pass her the input arguments
+parse "$@"
+
+# Evaluates the value of the command variable and executes the appropriate command
+case "$command" in
+	# If the command is list, call the list function
+	list)
+		list
+		;;
+	
+	# If the command is list-currency, call the list-currency function	
+	list-currency)
+		list_currency
+		;;
+	
+	# If the command is status, call the status function	
+	status)
+		status
+		;;
+		
+	# If the command is profit, call the profit function
+	profit)
+		profit
+		;;
+		
+	# If the command is not recognized
+	*)	
+		# Set the command to list as default
+		command="list"
+		# Check if the is at least two arguments
+		if [ $# -lt 2 ]; then
+			echo "Error: few given arguments">&2
+		exit 1
+		fi
+		# First argument is user
+		user="$1"
+		# Remove the first argument from the argument list
+		shift
+		# Store the remaining arguments in logs array
+		logs=("$@")
+		# Call the list function
+		list
+        	;;
+esac
+exit 0
